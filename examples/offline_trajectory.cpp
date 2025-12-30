@@ -48,18 +48,18 @@ int main(int, char**) {
     if (check_state != 0 || check_target != 0) throw std::runtime_error("Initial or final state outside bounds");
             
     std::cout << "Target: \n";
-    std::cout << target_position.transpose() << std::endl;
-    std::cout << target_velocity.transpose() << std::endl;
+    std::cout <<" pos: " << target_position.transpose() <<" vec: " << target_velocity.transpose()<< std::endl;
+    
     
     
     // ---------- Solve trajectory ---------- //
     
-    bool use_ruckig_as_warm_start = true;
+    bool use_ruckig_as_warm_start = false;
     planner.solve_trajectory(use_ruckig_as_warm_start);
 
 
     // --------- Write data to txt file --------- //
-    const int nPoints = 200;
+    const int nPoints = 10;
 
     // Storage for both trajectories
     Eigen::Matrix<double, 29, nPoints+1> ruckig_traj;
@@ -75,7 +75,13 @@ int main(int, char**) {
                 << target_velocity.transpose() << " "
                 << Matrix<double, 1, 14>::Zero() << " " 
                 << std::endl;
-        
+        std::cout << "Target state logged" << std::endl;
+        // Log target state
+        std::cout << 0.0 << " " 
+                << target_position.transpose() << " " 
+                << target_velocity.transpose() << " "
+                << Matrix<double, 1, 14>::Zero() << " " 
+                << std::endl;
         // Get Ruckig trajectory
         Matrix<double, 7, nPoints+1> position_trajectory, velocity_trajectory, acceleration_trajectory, torque_trajectory;
         Matrix<double, 1, nPoints+1> time;
@@ -85,12 +91,14 @@ int main(int, char**) {
         // Place data inside larger matrix for easier file writing
         ruckig_traj.row(0) = time;
         ruckig_traj.block(1, 0, 7,  nPoints+1) = position_trajectory;
+        std::cout << "=============ruckig_traj=============" << std::endl;
+        std::cout << ruckig_traj.transpose() << std::endl;
         ruckig_traj.block(8, 0, 7,  nPoints+1) = velocity_trajectory;
         ruckig_traj.block(15, 0, 7,  nPoints+1) = acceleration_trajectory;
         ruckig_traj.block(22, 0, 7,  nPoints+1) = torque_trajectory;
 
         logFile << ruckig_traj.transpose() << std::endl;
-    
+        
 
         // Log Polympc trajectory
         planner.get_MPC_trajectory<nPoints>(time, position_trajectory, velocity_trajectory, acceleration_trajectory, torque_trajectory);
@@ -98,6 +106,8 @@ int main(int, char**) {
         // Place data inside larger matrix for easier file writing
         polympc_traj.row(0) = time;
         polympc_traj.block(1, 0, 7,  nPoints+1) = position_trajectory;
+        std::cout << "=============polympc_traj=============" << std::endl;
+        std::cout << polympc_traj.transpose() << std::endl;
         polympc_traj.block(8, 0, 7,  nPoints+1) = velocity_trajectory;
         polympc_traj.block(15, 0, 7,  nPoints+1) = acceleration_trajectory;
         polympc_traj.block(22, 0, 7,  nPoints+1) = torque_trajectory;

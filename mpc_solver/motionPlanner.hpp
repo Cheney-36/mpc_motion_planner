@@ -20,6 +20,10 @@ class MotionPlanner{
         // Solve problem with ruckig to initialize MPC
         void warm_start_RK();
 
+        // PD 控制器内部增益
+        double Kp_ = 0.0;
+        double Kd_ = 0.0;
+
     public:
 
         MotionPlanner(std::string urdf_path);
@@ -35,6 +39,7 @@ class MotionPlanner{
         Ruckig<NDOF> otg;
         Trajectory<NDOF> trajectory;
         InputParameter<NDOF> input;
+        OutputParameter<NDOF> output;
 
         // Robot state and target
         Eigen::Matrix<double, 2*NDOF, 1> current_state;
@@ -66,6 +71,8 @@ class MotionPlanner{
         // Solve the OCP to generate the MPC trajectory
         void solve_trajectory(bool use_ruckig_as_warm_start);
 
+        void solve_trajectory_ruckig();
+        
         // Check if a given state is feasible
         int check_state_in_bounds(Matrix<double, 7, 1> &position, Matrix<double, 7, 1> &velocity, Matrix<double, 7, 1> acceleration = Matrix<double, NDOF, 1>::Zero());
 
@@ -87,11 +94,13 @@ class MotionPlanner{
                 position_trajectory.col(iPoint) =  Map<Matrix<double, 7, 1> >(new_position.data());
                 velocity_trajectory.col(iPoint) =  Map<Matrix<double, 7, 1> >(new_velocity.data());
                 acceleration_trajectory.col(iPoint) = Map<Matrix<double, 7, 1> >(new_acceleration.data());
+                std::cout << "i: " <<iPoint 
+                << "    t: " << time(iPoint) << " pos: " << Map<Matrix<double, 7, 1> >(new_position.data()).transpose()<< std::endl;
 
-                torque_trajectory.col(iPoint) =
-                pinocchio::rnea(robot.model, robot.data, position_trajectory.col(iPoint),
-                                                            velocity_trajectory.col(iPoint),
-                                                            acceleration_trajectory.col(iPoint));
+                // torque_trajectory.col(iPoint) =
+                // pinocchio::rnea(robot.model, robot.data, position_trajectory.col(iPoint),
+                //                                             velocity_trajectory.col(iPoint),
+                //                                             acceleration_trajectory.col(iPoint));
             }
         }
 
@@ -171,6 +180,43 @@ class MotionPlanner{
             mpc.p_guess(p0); 
         }
 
+        // 添加 PD 控制接口
+        void set_PD_gains(double Kp, double Kd);
+        void compute_PD(const Matrix<double, NDOF, 1> &q_cur, const Matrix<double, NDOF, 1> &dq_cur,
+                        const Matrix<double, NDOF, 1> &q_tar, const Matrix<double, NDOF, 1> &dq_tar,
+                        double dt,
+                        Matrix<double, NDOF, 1> &q_next, Matrix<double, NDOF, 1> &dq_next);
 
+        void compute_PID(const Matrix<double, NDOF, 1> &q_cur,
+            const Matrix<double, NDOF, 1> &dq_cur,
+            const Matrix<double, NDOF, 1> &q_tar,
+            const Matrix<double, NDOF, 1> &dq_tar,
+            Matrix<double, NDOF, 1> &integral_error,
+            double dt,
+            Matrix<double, NDOF, 1> &q_next,
+            Matrix<double, NDOF, 1> &dq_next);
+
+        // Solve the OCP to generate the MPC trajectory
+        void preview_control(const std::vector<Matrix<double, NDOF, 1>> &future_targets,
+            const Matrix<double, NDOF, 1> &q_cur,
+            const Matrix<double, NDOF, 1> &dq_cur,
+            double dt,
+            Matrix<double, NDOF, 1> &q_next,
+            Matrix<double, NDOF, 1> &dq_next);
+
+        void track_MPC(double time,
+            const Matrix<double, NDOF, 1> &q_cur,
+            const Matrix<double, NDOF, 1> &dq_cur,
+            double dt,
+            Matrix<double, NDOF, 1> &q_next,
+            Matrix<double, NDOF, 1> &dq_next);
+        
+        void smooth_target_with_ruckig(const Matrix<double, NDOF, 1> &q_cur,
+            const Matrix<double, NDOF, 1> &dq_cur,
+            const Matrix<double, NDOF, 1> &q_target,
+            const Matrix<double, NDOF, 1> &dq_target,
+            double duration,
+            std::vector<Matrix<double, NDOF, 1>> &position_traj,
+            std::vector<Matrix<double, NDOF, 1>> &velocity_traj);
         
 };

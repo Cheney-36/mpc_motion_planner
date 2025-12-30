@@ -1,6 +1,6 @@
 #include "motionPlanner.hpp"
 
-MotionPlanner::MotionPlanner(std::string urdf_path): robot(urdf_path), mpc(){
+MotionPlanner::MotionPlanner(std::string urdf_path): robot(urdf_path), mpc(), otg(0.001){
 
     Matrix<double, NDOF, 1> default_position = (robot.max_position.array() + robot.min_position.array())/2;
 
@@ -12,25 +12,24 @@ MotionPlanner::MotionPlanner(std::string urdf_path): robot(urdf_path), mpc(){
     mpc.ocp().init(urdf_path);
 
     // Solver settings
-    mpc.settings().max_iter = 2; 
-    mpc.qp_settings().max_iter = 700;
-    mpc.settings().line_search_max_iter = 10;
-    mpc.set_time_limits(0, 1);
-    mpc.qp_settings().eps_rel = 1e-3;
-    mpc.qp_settings().eps_abs = 1e-3;
-    // mpc.m_solver.settings().scaling = 10;
-
+    mpc.settings().max_iter = 2;                    // SQP 外层迭代 2
+    mpc.qp_settings().max_iter = 100;               // QP 内部迭代 700
+    mpc.settings().line_search_max_iter = 10;       // 线搜索迭代上限
+    mpc.set_time_limits(0, 0.01);                   // 总求解时间限制，1ms
+    mpc.qp_settings().eps_rel = 1e-2;               // QP 相对误差 1e-3
+    mpc.qp_settings().eps_abs = 1e-2;               // QP 绝对误差 1e-3
+    
     // Set constraints without margins (1.0) by default
     set_constraint_margins(1.0, 1.0, 1.0, 1.0, 1.0);
 }
 
 void MotionPlanner::set_target_state(Matrix<double, NDOF, 1> target_position, Matrix<double, NDOF, 1> target_velocity, Matrix<double, NDOF, 1> target_acceleration){
 
-    // Update MPC constraints
-    target_state.head(7) = target_position;
-    target_state.tail(7) = target_velocity;
+    // // Update MPC constraints
+    // target_state.head(7) = target_position;
+    // target_state.tail(7) = target_velocity;
 
-    mpc.final_state_bounds(target_state.array() - eps, target_state.array() + eps);
+    // mpc.final_state_bounds(target_state.array() - eps, target_state.array() + eps);
 
     // Update Ruckig constraints
     Matrix<double, 7, 1>::Map(input.target_position.data() ) = target_position;
@@ -40,11 +39,11 @@ void MotionPlanner::set_target_state(Matrix<double, NDOF, 1> target_position, Ma
 
 void MotionPlanner::set_current_state(Matrix<double, NDOF, 1> current_position, Matrix<double, NDOF, 1> current_velocity, Matrix<double, NDOF, 1> current_acceleration){
     
-    // Update MPC constraints
-    current_state.head(7) = current_position;
-    current_state.tail(7) = current_velocity;
+    // // Update MPC constraints
+    // current_state.head(7) = current_position;
+    // current_state.tail(7) = current_velocity;
 
-    mpc.initial_conditions(current_state);
+    // mpc.initial_conditions(current_state);
 
     // Update Ruckig constraints
     Matrix<double, 7, 1>::Map(input.current_position.data() ) = current_position;
@@ -83,9 +82,9 @@ void MotionPlanner::set_constraint_margins(double margin_position, double margin
     set_min_height(robot.min_height);
 
     // ---------- Ruckig constraints ---------- //
-    Matrix<double, 7, 1>::Map(input.max_velocity.data() ) = margin_velocity*robot.max_velocity;
-    Matrix<double, 7, 1>::Map(input.max_acceleration.data() ) = margin_acceleration*robot.max_acceleration;
-    Matrix<double, 7, 1>::Map(input.max_jerk.data() ) = margin_jerk*robot.max_jerk;
+    Matrix<double, 7, 1>::Map(input.max_velocity.data() ) = margin_velocity *Eigen::Matrix<double, 7, 1>::Ones();//*robot.max_velocity;
+    Matrix<double, 7, 1>::Map(input.max_acceleration.data() ) = margin_acceleration*Eigen::Matrix<double, 7, 1>::Ones();//*robot.max_acceleration;
+    Matrix<double, 7, 1>::Map(input.max_jerk.data() ) = margin_jerk*Eigen::Matrix<double, 7, 1>::Ones();//*robot.max_jerk;
 
 }
 
@@ -188,12 +187,12 @@ void MotionPlanner::solve_trajectory(bool use_ruckig_as_warm_start){
     double dT = duration.count()*1e-3;
 
     /** retrieve solution and statistics */
-    // std::cout << "MPC status: " << mpc.info().status.value << "\n";
-    // std::cout << "Num iterations: " << mpc.info().iter << "\n";
-    // std::cout << "Solve time: " << dT << " [ms] \n";
+    std::cout << "MPC status: " << mpc.info().status.value << "\n";
+    std::cout << "Num iterations: " << mpc.info().iter << "\n";
+    std::cout << "Solve time: " << dT << " [ms] \n";
 
-    // std::cout << "Final time: " << mpc.solution_p().transpose() << std::endl;
-    // std::cout << "-------------\n";
+    std::cout << "Final time: " << mpc.solution_p().transpose() << std::endl;
+    std::cout << "-------------\n";
 
 
     // Fix initial and final point at correct place
@@ -205,4 +204,148 @@ void MotionPlanner::solve_trajectory(bool use_ruckig_as_warm_start){
     mpc.x_guess(x_guess);	
     mpc.u_guess(mpc.solution_u());
     mpc.p_guess(mpc.solution_p());
+}
+
+
+void MotionPlanner::solve_trajectory_ruckig(){
+
+    // Compute Ruckig trajectory in an offline manner (outside of the control loop)
+    auto start = std::chrono::system_clock::now();
+    input.minimum_duration = 0.004; 
+    int index = 0;
+    while (otg.update(input, output) == ruckig::Result::Working) {
+        // map std::array to Eigen vector for printing
+        Eigen::Map<Eigen::Matrix<double, NDOF, 1>> posMap(output.new_position.data());
+        //std::cout << "t: " << output.time << " pos: " << posMap.transpose() << std::endl;
+        output.pass_to_input(input);
+    }
+    std::cout << "t2 : " << output.trajectory.get_duration() <<" ms" << std::endl;
+
+    trajectory = output.trajectory;
+    //input.duration_discretization = DurationDiscretization::Discrete;
+    //Result res = otg.calculate(input, trajectory);
+    // if (res != Result::Working && res != Result::Finished)
+    // {
+    //     std::cout << "Ruckig status: " << res << std::endl;
+    //     std::cout << "--------------------------------------------------------------" << std::endl;
+    //     std::cout << "--------------------------------------------------------------" << std::endl;
+    //     std::cout << "--------------------------------------------------------------" << std::endl;
+    //     std::cout << "--------------------------------------------------------------" << std::endl;
+    // }
+
+    // std::cout << "traj :  [" << trajectory.get_duration()*1000. << " ms]"<<std::endl;
+
+}
+
+// 设置 PD 控制增益
+void MotionPlanner::set_PD_gains(double Kp, double Kd) {
+    Kp_ = Kp;
+    Kd_ = Kd;
+}
+
+// 基于简单 PD 控制，计算下一个状态
+void MotionPlanner::compute_PD(const Matrix<double, NDOF, 1> &q_cur,
+                               const Matrix<double, NDOF, 1> &dq_cur,
+                               const Matrix<double, NDOF, 1> &q_tar,
+                               const Matrix<double, NDOF, 1> &dq_tar,
+                               double dt,
+                               Matrix<double, NDOF, 1> &q_next,
+                               Matrix<double, NDOF, 1> &dq_next) {
+    // 位置误差和速度误差
+    Matrix<double, NDOF, 1> e  = q_tar  - q_cur;
+    Matrix<double, NDOF, 1> de = dq_tar - dq_cur;
+    // PD 控制产生期望加速度
+    Matrix<double, NDOF, 1> accel = Kp_ * e + Kd_ * de;
+    // 数值积分得到速度和位置
+    dq_next = dq_cur + accel * dt;
+    q_next  = q_cur  + dq_next * dt;
+}
+
+// 添加 PID 控制版本
+void MotionPlanner::compute_PID(const Matrix<double, NDOF, 1> &q_cur,
+    const Matrix<double, NDOF, 1> &dq_cur,
+    const Matrix<double, NDOF, 1> &q_tar,
+    const Matrix<double, NDOF, 1> &dq_tar,
+    Matrix<double, NDOF, 1> &integral_error,
+    double dt,
+    Matrix<double, NDOF, 1> &q_next,
+    Matrix<double, NDOF, 1> &dq_next) {
+
+    static double Ki = 0.0;  // 如果需要，可以加一个 Ki 参数
+    Matrix<double, NDOF, 1> e  = q_tar - q_cur;
+    Matrix<double, NDOF, 1> de = dq_tar - dq_cur;
+
+    integral_error += e * dt;
+    Matrix<double, NDOF, 1> accel = Kp_ * e + Kd_ * de + Ki * integral_error;
+
+    dq_next = dq_cur + accel * dt;
+    q_next  = q_cur  + dq_next * dt;
+}
+
+// ---------- 轨迹预览控制 (Trajectory Preview Control) ----------
+void MotionPlanner::preview_control(const std::vector<Matrix<double, NDOF, 1>> &future_targets,
+         const Matrix<double, NDOF, 1> &q_cur,
+         const Matrix<double, NDOF, 1> &dq_cur,
+         double dt,
+         Matrix<double, NDOF, 1> &q_next,
+         Matrix<double, NDOF, 1> &dq_next) {
+    // 简单权重加权未来几个点，做预览
+    Matrix<double, NDOF, 1> weighted_target = Matrix<double, NDOF, 1>::Zero();
+    double total_weight = 0.0;
+    double weight = 1.0;
+
+    for (size_t i = 0; i < future_targets.size(); ++i) {
+        weighted_target += weight * future_targets[i];
+        total_weight += weight;
+        weight *= 0.8;  // 权重递减因子，可调
+    }
+
+    weighted_target /= total_weight;
+    compute_PD(q_cur, dq_cur, weighted_target, Matrix<double, NDOF, 1>::Zero(), dt, q_next, dq_next);
+}
+
+// ---------- MPC 输出轨迹点跟踪 ----------
+void MotionPlanner::track_MPC(double time,
+   const Matrix<double, NDOF, 1> &q_cur,
+   const Matrix<double, NDOF, 1> &dq_cur,
+   double dt,
+   Matrix<double, NDOF, 1> &q_next,
+   Matrix<double, NDOF, 1> &dq_next) {
+    Matrix<double, NDOF, 1> q_ref, dq_ref, ddq_ref, torque_ref;
+    get_MPC_point(time, q_ref, dq_ref, ddq_ref, torque_ref);
+    compute_PD(q_cur, dq_cur, q_ref, dq_ref, dt, q_next, dq_next);
+}
+
+// ---------- Ruckig 平滑目标点 ----------
+void MotionPlanner::smooth_target_with_ruckig(const Matrix<double, NDOF, 1> &q_cur,
+                   const Matrix<double, NDOF, 1> &dq_cur,
+                   const Matrix<double, NDOF, 1> &q_target,
+                   const Matrix<double, NDOF, 1> &dq_target,
+                   double duration,
+                   std::vector<Matrix<double, NDOF, 1>> &position_traj,
+                   std::vector<Matrix<double, NDOF, 1>> &velocity_traj) {
+    input.current_position = std::array<double, NDOF>();
+    input.current_velocity = std::array<double, NDOF>();
+    input.target_position = std::array<double, NDOF>();
+    input.target_velocity = std::array<double, NDOF>();
+
+    Eigen::VectorXd::Map(input.current_position.data(), NDOF) = q_cur;
+    Eigen::VectorXd::Map(input.current_velocity.data(), NDOF) = dq_cur;
+    Eigen::VectorXd::Map(input.target_position.data(), NDOF) = q_target;
+    Eigen::VectorXd::Map(input.target_velocity.data(), NDOF) = dq_target;
+
+    input.minimum_duration = duration;
+    Result result = otg.calculate(input, trajectory);
+
+    int N = static_cast<int>(duration / 0.001) -1;  // 250Hz 插值
+    position_traj.clear();
+    velocity_traj.clear();
+    std::array<double, NDOF> new_pos, new_vel, new_acc;
+
+    for (int i = 0; i <= N; ++i) {
+        double t = (duration / N) * i;
+        trajectory.at_time(t, new_pos, new_vel, new_acc);
+        position_traj.push_back(Eigen::Map<Matrix<double, NDOF, 1>>(new_pos.data()));
+        velocity_traj.push_back(Eigen::Map<Matrix<double, NDOF, 1>>(new_vel.data()));
+    }
 }
